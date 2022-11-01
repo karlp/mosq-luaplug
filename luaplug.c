@@ -17,6 +17,16 @@ static mosquitto_plugin_id_t *pid;
 struct plug_state_t {
 	mosquitto_plugin_id_t *pid;
 	lua_State *L;
+	int on_reload;
+	int on_acl_check;
+	int on_basic_auth;
+	int on_ext_auth_start;
+	int on_ext_auth_continue;
+	int on_control;
+	int on_message;
+	int on_psk_key;
+	int on_tick;
+	int on_disconnect;
 };
 
 static struct plug_state_t plug_state;
@@ -52,6 +62,72 @@ static int ml_publish(lua_State *L)
 	return 1;
 }
 
+static int ml_callback_handler(int event, void *event_data, void *userdata)
+{
+	struct plug_state_t *ps = userdata;
+	switch(event) {
+	case MOSQ_EVT_MESSAGE:
+		lua_rawgeti(ps->L, LUA_REGISTRYINDEX, ps->on_message);
+		struct mosquitto_evt_message *ev = event_data;
+		// GROSS, how do we let lua modify the data?
+		// lua_pushlightuserdata(ps->L, ev);
+		// for demo, just push a few constants
+		lua_pushstring(ps->L, mosquitto_client_id(ev->client));
+		lua_pushstring(ps->L, ev->topic);
+		lua_pushnumber(ps->L, ev->payloadlen);
+		lua_call(ps->L, 3, 0);
+		return MOSQ_ERR_SUCCESS;
+	case MOSQ_EVT_TICK:
+		lua_rawgeti(ps->L, LUA_REGISTRYINDEX, ps->on_tick);
+		// mosquitto just sets this all to zero, but... one day maybe...
+		struct mosquitto_evt_tick *evt = event_data;
+		lua_pushnumber(ps->L, evt->now_s);
+		lua_pushnumber(ps->L, evt->now_ns);
+		lua_pushnumber(ps->L, evt->next_s);
+		lua_pushnumber(ps->L, evt->next_ns);
+		lua_call(ps->L, 4, 0);
+		return MOSQ_ERR_SUCCESS;
+	default:
+		break;
+	}
+	mosquitto_log_printf(MOSQ_LOG_ERR, "haven't implemented the rest!");
+	return MOSQ_ERR_NOT_SUPPORTED; // I think it's meant to return it to me?
+}
+
+
+static int ml_register_cb(lua_State *L)
+{
+	// TODO - do I have a context here? or did I register these as globals?
+	int event = luaL_checkinteger(L, 1);
+	if (!lua_isfunction(L, 2)) {
+		return luaL_argerror(L, 2, "Expected a callback function");
+	}
+	// pop and save the function
+	int ref = luaL_ref(L, LUA_REGISTRYINDEX);
+	switch(event) {
+	case MOSQ_EVT_MESSAGE:
+		plug_state.on_message = ref;
+		break;
+	case MOSQ_EVT_TICK:
+		plug_state.on_tick = ref;
+		break;
+	default:
+		return luaL_argerror(L, 1, "Unimplemented support for this callback!");
+	}
+
+	int rc = mosquitto_callback_register(plug_state.pid, event, ml_callback_handler, NULL, &plug_state);
+	if (rc != MOSQ_ERR_SUCCESS) {
+		luaL_error(L, "Failed to register a plugin: %d %s", rc, "strerr is not in plugins :(");
+	}
+	return 0;
+}
+
+static int ml_unregister_cb(lua_State *L)
+{
+	luaL_error(L, "unregistering callbacks is unimplemented!");
+	return 1;
+}
+
 struct define {
 	const char* name;
 	int val;
@@ -62,12 +138,26 @@ static const struct define D[] = {
 	{"LOG_NOTICE", MOSQ_LOG_NOTICE},
 	{"LOG_WARNING", MOSQ_LOG_WARNING},
 	{"LOG_ERR", MOSQ_LOG_ERR},
+
+	{"EVT_RELOAD", MOSQ_EVT_RELOAD},
+	{"EVT_ACL_CHECK", MOSQ_EVT_ACL_CHECK},
+	{"EVT_BASIC_AUTH", MOSQ_EVT_BASIC_AUTH},
+	{"EVT_EXT_AUTH_START", MOSQ_EVT_EXT_AUTH_START},
+	{"EVT_EXT_AUTH_CONTINUE", MOSQ_EVT_EXT_AUTH_CONTINUE},
+	{"EVT_CONTROL", MOSQ_EVT_CONTROL},
+	{"EVT_MESSAGE", MOSQ_EVT_MESSAGE},
+	{"EVT_PSK_KEY", MOSQ_EVT_PSK_KEY},
+	{"EVT_TICK", MOSQ_EVT_TICK},
+	{"EVT_DISCONNECT", MOSQ_EVT_DISCONNECT},
+
 	{NULL, 0},
 };
 
 static const struct luaL_Reg R[] = {
 	{"broker_publish", ml_publish},
 	{"log", ml_log_simple},
+	{"register", ml_register_cb},
+	{"unregister", ml_unregister_cb},
 	{NULL,		NULL}
 };
 
@@ -86,6 +176,8 @@ static void lp_register_defs(lua_State *L, const struct define *D)
 static int lp_open(struct plug_state_t *ps, char *fn)
 {
 	ps->L = luaL_newstate();
+	ps->on_message = LUA_REFNIL;
+	/// FIXME - fill in the rest!
 	if (!ps->L) {
 		mosquitto_log_printf(MOSQ_LOG_ERR, "Failed to create a lua state!");
 		return MOSQ_ERR_UNKNOWN; // nothing else looks good
