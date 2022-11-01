@@ -317,9 +317,22 @@ static void lp_register_defs(lua_State *L, const struct define *D)
 	}
 }
 
+// This is l_alloc from lauxlib.c in lua 5.4, adjusted to use mosquitto funcs
+static void *lp_alloc_mosq(void *ud, void *ptr, size_t osize, size_t nsize)
+{
+	(void) ud;
+	(void) osize; /* not used */
+	if (nsize == 0) {
+		mosquitto_free(ptr);
+		return NULL;
+	} else
+		return mosquitto_realloc(ptr, nsize);
+}
+
 static int lp_open(struct plug_state_t *ps, char *fn)
 {
 	ps->L = luaL_newstate();
+	lua_setallocf(ps->L, lp_alloc_mosq, NULL);
 	ps->on_message = LUA_REFNIL;
 	/// FIXME - fill in the rest!
 	if (!ps->L) {
