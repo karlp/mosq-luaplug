@@ -366,9 +366,11 @@ static int lp_open(struct plug_state_t *ps, char *fn)
 int mosquitto_plugin_version(int count, const int *versions)
 {
 	for (int i = 0; i < count; i++) {
-		//printf("KARL: broker advertises plugin api: %d\n", versions[i]);
+		if (versions[i] == 5) {
+			return 5;
+		}
 	}
-	return 5;
+	return -1;
 }
 
 
