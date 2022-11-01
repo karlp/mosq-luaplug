@@ -36,6 +36,7 @@ function k_on_basic_auth(client, user, pass)
 		return true
 	end
 	pp("Deferring...")
+	plug.publish(nil, "luaplug/log/basic_auth", string.format("deferring auth for %s:%s", user, pass)) 
 	return nil, plug.ERR_PLUGIN_DEFER
 end
 

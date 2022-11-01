@@ -242,7 +242,7 @@ static const struct luaL_Reg R[] = {
 //	{"client_sub_count", ml_client_sub_count},
 	{"client_username", ml_client_username},
 
-	{"broker_publish", ml_publish},
+	{"publish", ml_publish},
 	{"log", ml_log_simple},
 	{"register", ml_register_cb},
 	{"unregister", ml_unregister_cb},
