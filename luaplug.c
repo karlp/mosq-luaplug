@@ -12,8 +12,6 @@
 #include "mosquitto_broker.h"
 #include "mosquitto_plugin.h"
 
-static mosquitto_plugin_id_t *pid;
-
 struct plug_state_t {
 	mosquitto_plugin_id_t *pid;
 	lua_State *L;
@@ -38,6 +36,32 @@ static int ml_log_simple(lua_State *L)
 	mosquitto_log_printf(level, s);
 	return 0;
 }
+
+static int ml_client_address(lua_State *L)
+{
+	struct mosquitto *c = lua_touserdata(L, 1);
+	const char *a = mosquitto_client_address(c);
+	lua_pushstring(L, a);
+	return 1;
+}
+
+static int ml_client_id(lua_State *L)
+{
+	struct mosquitto *c = lua_touserdata(L, 1);
+	const char *a = mosquitto_client_id(c);
+	lua_pushstring(L, a);
+	return 1;
+}
+
+static int ml_client_username(lua_State *L)
+{
+	struct mosquitto *c = lua_touserdata(L, 1);
+	const char *a = mosquitto_client_username(c);
+	lua_pushstring(L, a);
+	return 1;
+}
+
+
 
 static int ml_publish(lua_State *L)
 {
@@ -65,14 +89,14 @@ static int ml_publish(lua_State *L)
 static int ml_callback_handler(int event, void *event_data, void *userdata)
 {
 	struct plug_state_t *ps = userdata;
+	int code;
 	switch(event) {
 	case MOSQ_EVT_MESSAGE:
 		lua_rawgeti(ps->L, LUA_REGISTRYINDEX, ps->on_message);
 		struct mosquitto_evt_message *ev = event_data;
 		// GROSS, how do we let lua modify the data?
-		// lua_pushlightuserdata(ps->L, ev);
 		// for demo, just push a few constants
-		lua_pushstring(ps->L, mosquitto_client_id(ev->client));
+		lua_pushlightuserdata(ps->L, ev->client);
 		lua_pushstring(ps->L, ev->topic);
 		lua_pushnumber(ps->L, ev->payloadlen);
 		lua_call(ps->L, 3, 0);
@@ -87,6 +111,44 @@ static int ml_callback_handler(int event, void *event_data, void *userdata)
 		lua_pushnumber(ps->L, evt->next_ns);
 		lua_call(ps->L, 4, 0);
 		return MOSQ_ERR_SUCCESS;
+	case MOSQ_EVT_ACL_CHECK:
+		lua_rawgeti(ps->L, LUA_REGISTRYINDEX, ps->on_acl_check);
+		struct mosquitto_evt_acl_check *ev_acl = event_data;
+		lua_pushlightuserdata(ps->L, ev_acl->client);
+		lua_pushnumber(ps->L, ev_acl->access);
+		lua_pushstring(ps->L, ev_acl->topic);
+		lua_pushnumber(ps->L, ev_acl->qos);
+		lua_pushboolean(ps->L, ev_acl->retain);
+		// FIXME - v5 properties are glossed over again...
+		lua_call(ps->L, 5, LUA_MULTRET);
+		if (lua_gettop(ps->L) == 1) {
+			bool rv = lua_toboolean(ps->L, -1);
+			lua_pop(ps->L, 1);
+			return rv ? MOSQ_ERR_SUCCESS :  MOSQ_ERR_ACL_DENIED;
+		}
+		// assume normal "nil, code" multi return style
+		code = lua_tonumber(ps->L, -1);
+		lua_settop(ps->L, 0);
+		return code;
+
+	case MOSQ_EVT_BASIC_AUTH:
+		lua_rawgeti(ps->L, LUA_REGISTRYINDEX, ps->on_basic_auth);
+		struct mosquitto_evt_basic_auth *ev_ba = event_data;
+		lua_pushlightuserdata(ps->L, ev_ba->client);
+		lua_pushstring(ps->L, ev_ba->username);
+		lua_pushstring(ps->L, ev_ba->password);
+		lua_call(ps->L, 3, 1);
+		if (lua_gettop(ps->L) == 1) {
+			bool rv = lua_toboolean(ps->L, -1);
+			lua_pop(ps->L, 1);
+			return rv ? MOSQ_ERR_SUCCESS :  MOSQ_ERR_AUTH;
+		}
+		// assume normal "nil, code" multi return style
+		code = lua_tonumber(ps->L, -1);
+		lua_settop(ps->L, 0);
+		return code;
+
+
 	default:
 		break;
 	}
@@ -111,6 +173,12 @@ static int ml_register_cb(lua_State *L)
 	case MOSQ_EVT_TICK:
 		plug_state.on_tick = ref;
 		break;
+	case MOSQ_EVT_ACL_CHECK:
+		plug_state.on_acl_check = ref;
+		break;
+	case MOSQ_EVT_BASIC_AUTH:
+		plug_state.on_basic_auth = ref;
+		break;
 	default:
 		return luaL_argerror(L, 1, "Unimplemented support for this callback!");
 	}
@@ -133,6 +201,10 @@ struct define {
 	int val;
 };
 static const struct define D[] = {
+	{"ACL_SUBSCRIBE", MOSQ_ACL_SUBSCRIBE},
+	{"ACL_READ", MOSQ_ACL_READ},
+	{"ACL_WRITE", MOSQ_ACL_WRITE},
+
 	{"LOG_DEBUG", MOSQ_LOG_DEBUG},
 	{"LOG_INFO", MOSQ_LOG_INFO},
 	{"LOG_NOTICE", MOSQ_LOG_NOTICE},
@@ -150,10 +222,26 @@ static const struct define D[] = {
 	{"EVT_TICK", MOSQ_EVT_TICK},
 	{"EVT_DISCONNECT", MOSQ_EVT_DISCONNECT},
 
+	{"ERR_ACL_DENIED", MOSQ_ERR_ACL_DENIED},
+	{"ERR_AUTH", MOSQ_ERR_AUTH},
+	{"ERR_PLUGIN_DEFER", MOSQ_ERR_PLUGIN_DEFER},
+	{"ERR_UNKNOWN", MOSQ_ERR_UNKNOWN},
+
 	{NULL, 0},
 };
 
 static const struct luaL_Reg R[] = {
+	// TODO FIXME - these should ideally be metatable methods on the client?
+	{"client_address", ml_client_address},
+//	{"client_clean_session", ml_client_clean_session},
+	{"client_id", ml_client_id},
+//	{"client_keepalive", ml_client_keepalive},
+//	{"client_certificate", ml_client_certificate},
+//	{"client_protocol", ml_client_protocol},
+//	{"client_protocol_version", ml_client_protocol_version},
+//	{"client_sub_count", ml_client_sub_count},
+	{"client_username", ml_client_username},
+
 	{"broker_publish", ml_publish},
 	{"log", ml_log_simple},
 	{"register", ml_register_cb},

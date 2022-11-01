@@ -1,9 +1,10 @@
-# luaplug mosquitto broker plugins, in lua.
+# luaplug: mosquitto broker plugins, in lua.
 
 Do you hate writing C?  Do you yearn for the simplicity of 1 based counting
 and the dichotomy of arrays/tables that lua can give you?
 
 Do you want to do insane things inside the broker, instead of via a separate process?
+Are you _really_ excited about runtime errors bringing down your entire broker?!
 
 You're in luck!
 
