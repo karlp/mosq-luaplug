@@ -11,12 +11,12 @@ end
 
 function k_onmsg(client, topic, plen)
     pp(string.format("on message: cu: %s, cid: %s, caddr: %s, topic: %s payload len: %d",
-    	plug.client_username(client), plug.client_id(client), plug.client_address(client), topic, plen))
+    	client:username(), client:id(), client:address(), topic, plen))
 end
 
 function k_onacl_check(client, access, topic, qos, retain)
     pp(string.format("on acl_check: cu: %s, cid: %s, caddr: %s, access: %s, topic: %s qos: %d",
-    	plug.client_username(client), plug.client_id(client), plug.client_address(client), access_codes[access], topic, qos))
+    	client:username(), client:id(), client:address(), access_codes[access], topic, qos))
     if topic:find("good") then
 	    return true
     end
@@ -28,7 +28,7 @@ end
 
 function k_on_basic_auth(client, user, pass)
 	pp(string.format("on basic auth: cu: %s ci: %s caddr: %s, user: %s, pass: %s",
-		plug.client_username(client), plug.client_id(client), plug.client_address(client), user, pass))
+		client:username(), client:id(), client:address(), user, pass))
 	if user == "badman" then
 		return false
 	end

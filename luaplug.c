@@ -12,6 +12,8 @@
 #include "mosquitto_broker.h"
 #include "mosquitto_plugin.h"
 
+#define LP_META_CTX "luaplug.ctx"
+
 struct plug_state_t {
 	mosquitto_plugin_id_t *pid;
 	lua_State *L;
@@ -36,32 +38,6 @@ static int ml_log_simple(lua_State *L)
 	mosquitto_log_printf(level, s);
 	return 0;
 }
-
-static int ml_client_address(lua_State *L)
-{
-	struct mosquitto *c = lua_touserdata(L, 1);
-	const char *a = mosquitto_client_address(c);
-	lua_pushstring(L, a);
-	return 1;
-}
-
-static int ml_client_id(lua_State *L)
-{
-	struct mosquitto *c = lua_touserdata(L, 1);
-	const char *a = mosquitto_client_id(c);
-	lua_pushstring(L, a);
-	return 1;
-}
-
-static int ml_client_username(lua_State *L)
-{
-	struct mosquitto *c = lua_touserdata(L, 1);
-	const char *a = mosquitto_client_username(c);
-	lua_pushstring(L, a);
-	return 1;
-}
-
-
 
 static int ml_publish(lua_State *L)
 {
@@ -135,6 +111,9 @@ static int ml_callback_handler(int event, void *event_data, void *userdata)
 		lua_rawgeti(ps->L, LUA_REGISTRYINDEX, ps->on_basic_auth);
 		struct mosquitto_evt_basic_auth *ev_ba = event_data;
 		lua_pushlightuserdata(ps->L, ev_ba->client);
+		luaL_getmetatable(ps->L, LP_META_CTX);
+		lua_setmetatable(ps->L, -2);
+
 		lua_pushstring(ps->L, ev_ba->username);
 		lua_pushstring(ps->L, ev_ba->password);
 		lua_call(ps->L, 3, 1);
@@ -196,6 +175,83 @@ static int ml_unregister_cb(lua_State *L)
 	return 1;
 }
 
+static int mlc_address(lua_State *L)
+{
+	struct mosquitto *c = luaL_checkudata(L, 1, LP_META_CTX);
+	const char *a = mosquitto_client_address(c);
+	lua_pushstring(L, a);
+	return 1;
+}
+
+static int mlc_clean_session(lua_State *L)
+{
+	struct mosquitto *c = luaL_checkudata(L, 1, LP_META_CTX);
+	const bool a = mosquitto_client_clean_session(c);
+	lua_pushboolean(L, a);
+	return 1;
+}
+
+static int mlc_id(lua_State *L)
+{
+	struct mosquitto *c = luaL_checkudata(L, 1, LP_META_CTX);
+	const char *a = mosquitto_client_id(c);
+	lua_pushstring(L, a);
+	return 1;
+}
+
+static int mlc_keepalive(lua_State *L)
+{
+	struct mosquitto *c = luaL_checkudata(L, 1, LP_META_CTX);
+	const int a = mosquitto_client_keepalive(c);
+	lua_pushnumber(L, a);
+	return 1;
+}
+
+static int mlc_protocol(lua_State *L)
+{
+	struct mosquitto *c = lua_touserdata(L, 1);
+	const int a = mosquitto_client_protocol(c);
+	lua_pushnumber(L, a);
+	switch (a) {
+	case mp_mqtt:
+		lua_pushstring(L, "MQTT");
+		break;
+	case mp_mqttsn:
+		lua_pushstring(L, "MQTT-SN");
+		break;
+	case mp_websockets:
+		lua_pushstring(L, "MQTT/WS");
+		break;
+	default:
+		lua_pushnil(L);
+	}
+	return 2;
+}
+
+static int mlc_protocol_version(lua_State *L)
+{
+	struct mosquitto *c = lua_touserdata(L, 1);
+	const int a = mosquitto_client_protocol_version(c);
+	lua_pushnumber(L, a);
+	return 1;
+}
+
+static int mlc_sub_count(lua_State *L)
+{
+	struct mosquitto *c = lua_touserdata(L, 1);
+	const int a = mosquitto_client_sub_count(c);
+	lua_pushnumber(L, a);
+	return 1;
+}
+
+static int mlc_username(lua_State *L)
+{
+	struct mosquitto *c = luaL_checkudata(L, 1, LP_META_CTX);
+	const char *a = mosquitto_client_username(c);
+	lua_pushstring(L, a);
+	return 1;
+}
+
 struct define {
 	const char* name;
 	int val;
@@ -231,17 +287,6 @@ static const struct define D[] = {
 };
 
 static const struct luaL_Reg R[] = {
-	// TODO FIXME - these should ideally be metatable methods on the client?
-	{"client_address", ml_client_address},
-//	{"client_clean_session", ml_client_clean_session},
-	{"client_id", ml_client_id},
-//	{"client_keepalive", ml_client_keepalive},
-//	{"client_certificate", ml_client_certificate},
-//	{"client_protocol", ml_client_protocol},
-//	{"client_protocol_version", ml_client_protocol_version},
-//	{"client_sub_count", ml_client_sub_count},
-	{"client_username", ml_client_username},
-
 	{"publish", ml_publish},
 	{"log", ml_log_simple},
 	{"register", ml_register_cb},
@@ -249,6 +294,17 @@ static const struct luaL_Reg R[] = {
 	{NULL,		NULL}
 };
 
+static const struct luaL_Reg client_R[] = {
+	{"address", mlc_address},
+	{"clean_session", mlc_clean_session},
+	{"id", mlc_id},
+	{"keepalive", mlc_keepalive},
+	{"protocol", mlc_protocol},
+	{"protocol_version", mlc_protocol_version},
+	{"sub_count", mlc_sub_count},
+	{"username", mlc_username},
+	{NULL, NULL}
+};
 
 
 // internal machinery below here...
@@ -280,6 +336,13 @@ static int lp_open(struct plug_state_t *ps, char *fn)
 		printf("Preparing file failed: %s\n", lua_tostring(ps->L, -1));
 		return MOSQ_ERR_UNKNOWN;
 	}
+
+	// Setup a metatable for clients
+	luaL_newmetatable(ps->L, LP_META_CTX);
+	lua_pushvalue(ps->L, -1);
+	lua_setfield(ps->L, -2, "__index");
+	luaL_setfuncs(ps->L, client_R, 0);
+
 	luaL_newlib(ps->L, R);
 	lp_register_defs(ps->L, D);
 	lua_setglobal(ps->L, "plug"); // We _could_ make this a config option...
