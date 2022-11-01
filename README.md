@@ -47,6 +47,20 @@ function cleanup()
 end
 ```
 
+# Unimplemented/incomplete/missing
+
+## mqtt v5 properties are missing
+
+You could/should probably steal a bunch of it from the
+functions: `create_property_list_from_lua_stack` and `create_lua_stack_from_property_list` at
+[https://github.com/flukso/lua-mosquitto/pull/33/files]()
+
+## events: MOSQ_EVT_RELOAD, MOSQ_EVT_CONTROL, MOSQ_EVT_DISCONNECT
+And also the extended auth stuff.
+
+## Cleanup and unregister
+Might be interesting if you're going to be dynamic, especially using the CONTROL$/ magic, but wasn
+important for basic configs.
 
 # Example output
 
